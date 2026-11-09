@@ -1,11 +1,12 @@
 // ==UserScript==
 // @name         機器バーコード差し込み（STB / C-CAS）
 // @namespace    kiki-renkei
-// @version      1.0
+// @version      1.1
 // @description  既存の顧客ページに、スマホで読み取ったSTB・C-CAS番号とバーコードを差し込んで一緒に印刷する
 // @match        https://顧客システムのドメイン/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_addStyle
+// @grant        unsafeWindow
 // @connect      script.google.com
 // @connect      script.googleusercontent.com
 // @require      https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.6/JsBarcode.all.min.js
@@ -21,8 +22,12 @@
     GAS_URL: 'https://script.google.com/macros/s/XXXXXXXXXXXX/exec',
     TOKEN:   'ここを合言葉に変更',
 
-    // 顧客ページだと判定するURL（正規表現）。@match より絞りたいとき用
+    // パネルを出すページ（正規表現）。@match より絞りたいとき用
     PAGE_URL: /.*/,
+
+    // 印刷用ページ（正規表現）。一致したページでは開いた時点で最新の読取データを自動で差し込む
+    // 例: 既存システムの「基本情報印刷」で開くページ  /[?&]mode=14(&|$)/
+    PRINT_PAGE_URL: null,
 
     // 顧客番号の取り方（上から順に試す）
     CUST_NO_URL_PARAM: '',                                 // URLの ?xxx=顧客番号 の xxx。例: 'para0'
@@ -124,7 +129,11 @@
     });
   }
 
-  $('get').onclick = async () => {
+  let pending = null;  // 取得中は印刷を待たせる
+
+  $('get').onclick = () => { pending = load().finally(() => { pending = null; }); return pending; };
+
+  async function load() {
     const cust = $('cust').value.trim();
     if (!cust) return st('顧客番号を入れてください。', true);
     $('get').disabled = true; st('取得中…');
@@ -133,7 +142,7 @@
       const map = new Map();
       items.forEach(it => { if (!map.has(it.id)) map.set(it.id, []); map.get(it.id).push(it); });
       groups = [...map.values()].reverse();
-      if (!groups.length) { $('sends').innerHTML = ''; return st('この顧客番号の読取データはまだありません。', true); }
+      if (!groups.length) { $('sends').innerHTML = ''; return st(`顧客番号 ${cust} の読取データはまだありません。`, true); }
       $('sends').innerHTML = groups.map((g, i) => {
         const d = new Date(g[0].at);
         return `<label><input type="checkbox" data-g="${i}" ${i === 0 ? 'checked' : ''} style="width:auto">
@@ -142,10 +151,10 @@
       }).join('');
       $('sends').querySelectorAll('input').forEach(c => c.onchange = render);
       render();
-      st(groups.length > 1 ? `${groups.length}回分の送信があります。印刷する分にチェックしてください。` : '差し込みました。');
+      st(groups.length > 1 ? `最新の読取を差し込みました。ほかに${groups.length - 1}回分あります（チェックで追加）。` : '差し込みました。');
     } catch (e) { st(e.message, true); }
     finally { $('get').disabled = false; }
-  };
+  }
 
   /* ---------- 差し込みブロック ---------- */
   function render() {
@@ -190,6 +199,22 @@
     }
     window.print();
   };
+
+  /* 既存ページの印刷ボタン（window.print）を押したとき、取得中なら最大5秒待ってから印刷する */
+  try {
+    const w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+    const origPrint = w.print.bind(w);
+    const wrapped = function () {
+      if (!pending) return origPrint();
+      Promise.race([pending, new Promise(r => setTimeout(r, 5000))]).then(() => origPrint());
+    };
+    w.print = typeof exportFunction === 'function' ? exportFunction(wrapped, w) : wrapped;
+  } catch (e) {}
+
+  /* 印刷用ページでは自動で取得して差し込む */
+  if (CONFIG.PRINT_PAGE_URL && CONFIG.PRINT_PAGE_URL.test(location.href) && $('cust').value) {
+    $('get').click();
+  }
 
   /* 画面遷移が再読み込みなしで起きるシステム向け：URLが変わったら顧客番号を取り直す */
   let lastUrl = location.href;
