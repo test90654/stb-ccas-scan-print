@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>機器バーコード読取</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=BIZ+UDPGothic:wght@400;700&family=BIZ+UDGothic:wght@400;700&display=swap">
+<script src="https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js"></script>
+<script>
+/* 中継URLと合言葉はコードに書かず、各スマホの「接続設定」で一度だけ入力して端末内に保存する */
+const CONFIG = (()=>{try{return JSON.parse(localStorage.getItem("kiki-config")||"null")||{GAS_URL:"",TOKEN:""}}catch(e){return{GAS_URL:"",TOKEN:""}}})();
+</script>
+<style>
+/* 1カラムの現場用フォーム。下部に送信バー */
+:root{
+  --bg:#f3f5f7; --panel:#ffffff; --fg:#1b2430; --muted:#5d6b7a; --line:#d5dce3;
+  --accent:#0b6e8a; --accent-ink:#ffffff; --stb:#0b6e8a; --cas:#a4521b; --ok:#2e7d4f; --warn:#b26a00; --err:#b3261e;
+  --sans:"BIZ UDPGothic","Hiragino Sans","Yu Gothic",system-ui,sans-serif;
+  --mono:"BIZ UDGothic","Menlo","Consolas",monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#12171d; --panel:#1b232c; --fg:#e6ebf0; --muted:#9aa8b6; --line:#2d3945;
+  --accent:#3fb1cf; --accent-ink:#0b1a20; --stb:#3fb1cf; --cas:#e08a4f; --ok:#5ec48a; --warn:#e3a33b; --err:#f2817a; color-scheme:dark}}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--fg);font:15px/1.6 var(--sans);
+  padding:max(12px,env(safe-area-inset-top)) max(16px,env(safe-area-inset-right)) 130px max(16px,env(safe-area-inset-left))}
+.wrap{max-width:640px;margin:0 auto;display:grid;gap:14px}
+h1{font-size:20px;margin:4px 0 0}
+.sub{color:var(--muted);font-size:13px;margin:0}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;display:grid;gap:12px}
+.panel h2{font-size:15px;margin:0}
+label{display:grid;gap:4px;font-size:12px;color:var(--muted);letter-spacing:.03em}
+input{font:16px var(--sans);color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;width:100%;min-width:0}
+input.num{font-family:var(--mono);letter-spacing:.04em}
+input:focus,button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+button{font:700 14px var(--sans);border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--fg);padding:10px 14px;cursor:pointer}
+button.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+button.ghost{background:transparent}
+button:disabled{opacity:.5}
+.row{display:flex;gap:8px;flex-wrap:wrap}
+.inline{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:end}
+.dev{display:grid;grid-template-columns:auto 1fr auto auto;gap:8px;align-items:center;padding:10px;border:1px solid var(--line);border-radius:8px}
+.tag{font:700 12px var(--sans);padding:4px 8px;border-radius:999px;color:#fff;white-space:nowrap}
+.tag.stb{background:var(--stb)} .tag.cas{background:var(--cas)}
+.hint{font-size:12px;color:var(--muted);grid-column:2/-1;font-family:var(--mono)}
+.hint.ok{color:var(--ok)} .hint.warn{color:var(--warn)}
+@media (max-width:480px){.dev{grid-template-columns:auto 1fr auto}.dev .del{grid-column:3;grid-row:1}.dev .scan{grid-column:1/-1}}
+.status{font-size:14px;padding:10px 12px;border-radius:8px;border:1px solid var(--line)}
+.status.ok{color:var(--ok);border-color:var(--ok)} .status.err{color:var(--err);border-color:var(--err)}
+.hist{display:grid;gap:6px;font-size:13px}
+.hist div{display:flex;justify-content:space-between;gap:8px;border-bottom:1px dashed var(--line);padding-bottom:4px;font-variant-numeric:tabular-nums}
+.bar{position:fixed;left:0;right:0;bottom:0;background:var(--panel);border-top:1px solid var(--line);
+  padding:12px max(16px,env(safe-area-inset-right)) calc(12px + env(safe-area-inset-bottom)) max(16px,env(safe-area-inset-left));display:flex;gap:8px;justify-content:center;z-index:5}
+.bar button{flex:1;max-width:280px;padding:14px}
+#scanner{position:fixed;inset:0;background:#000;z-index:20;display:flex;flex-direction:column}
+#scanner video{flex:1;width:100%;object-fit:cover;min-height:0}
+#scanner .guide{position:absolute;left:8%;right:8%;top:38%;height:22%;border:3px solid #fff;border-radius:10px;box-shadow:0 0 0 2000px rgba(0,0,0,.35);pointer-events:none}
+#scanner .top{position:absolute;top:0;left:0;right:0;padding:calc(14px + env(safe-area-inset-top)) 16px 14px;color:#fff;text-align:center;font-weight:700;background:linear-gradient(#000a,#0000)}
+#scanner .ctrl{display:flex;gap:8px;padding:12px 16px calc(14px + env(safe-area-inset-bottom));background:#000}
+#scanner .ctrl button{flex:1}
+#scanMsg{color:#ffd77a;font-size:13px;text-align:center;padding:0 16px 6px;background:#000}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>機器バーコード読取</h1>
+    <p class="sub">読み取った番号は顧客番号ごとに保存され、事務所PCの顧客ページで印刷できます。</p>
+  </header>
+
+  <section class="panel">
+    <h2>お客様</h2>
+    <div class="inline">
+      <label>顧客番号<input id="custNo" class="num" autocomplete="off" placeholder="作業指示書の顧客番号"></label>
+      <button class="primary" id="scanCust">読取</button>
+    </div>
+    <label>担当者<input id="staff" autocomplete="name"></label>
+  </section>
+
+  <section class="panel">
+    <h2>設置機器</h2>
+    <div id="devList" style="display:grid;gap:8px"></div>
+    <div class="row">
+      <button class="ghost" id="addPair">＋ STB/C-CAS 1組</button>
+      <button class="ghost" id="addStb">＋ STB</button>
+      <button class="ghost" id="addCas">＋ C-CAS</button>
+    </div>
+  </section>
+
+  <div id="status" class="status" hidden></div>
+
+  <section class="panel" id="queueBox" hidden>
+    <h2>未送信 <span id="queueCount"></span></h2>
+    <p class="sub">電波が戻ったら「再送」を押してください。</p>
+    <button id="retry">再送</button>
+  </section>
+
+  <section class="panel">
+    <h2>この端末の送信履歴</h2>
+    <div class="hist" id="hist"><span class="sub">まだありません</span></div>
+  </section>
+
+  <section class="panel" id="cfgBox">
+    <h2>接続設定</h2>
+    <p class="sub" id="cfgState"></p>
+    <div id="cfgForm" style="display:grid;gap:10px">
+      <label>中継URL（Apps Script のウェブアプリURL）<input id="cfgUrl" class="num" inputmode="url" autocomplete="off" placeholder="https://script.google.com/macros/s/…/exec"></label>
+      <label>合言葉<input id="cfgToken" type="password" autocomplete="off"></label>
+      <div class="row"><button class="primary" id="cfgSave">保存</button></div>
+    </div>
+    <button class="ghost" id="cfgEdit" hidden>設定を変更</button>
+  </section>
+</div>
+
+<div class="bar">
+  <button class="ghost" id="clearBtn">クリア</button>
+  <button class="primary" id="sendBtn">送信</button>
+</div>
+
+<div id="scanner" hidden>
+  <video id="video" playsinline muted></video>
+  <div class="guide"></div>
+  <div class="top" id="scanTitle"></div>
+  <div id="scanMsg"></div>
+  <div class="ctrl">
+    <button id="photoBtn">写真から読取</button>
+    <button class="primary" id="closeScan">閉じる</button>
+  </div>
+  <input type="file" id="photoInput" accept="image/*" capture="environment" hidden>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+const LABEL={stb:"STB",cas:"C-CAS"};
+const blank=()=>[{type:"stb",no:"",model:""},{type:"cas",no:"",model:""}];
+let devices=blank(), reader=null, scanTarget=null; // scanTarget: 数値=機器行, "cust"=顧客番号
+
+/* ---------- 端末内保存 ---------- */
+function ls(k,v){try{if(v===undefined)return JSON.parse(localStorage.getItem(k)||"null");localStorage.setItem(k,JSON.stringify(v))}catch(e){return null}}
+function saveDraft(){ls("kiki-draft",{custNo:$("custNo").value,devices});ls("kiki-staff",$("staff").value)}
+function loadDraft(){const d=ls("kiki-draft");if(d){$("custNo").value=d.custNo||"";if(d.devices&&d.devices.length)devices=d.devices}$("staff").value=ls("kiki-staff")||""}
+
+/* ---------- 番号チェック ---------- */
+const clean=s=>(s||"").trim().replace(/\s+/g,"");
+function check(d){
+  const n=clean(d.no).replace(/-/g,"");
+  if(!n)return["未入力","warn"];
+  if(d.type==="cas")return /^\d{20}$/.test(n)?["20桁 OK","ok"]:[n.length+"桁（C-CASは通常20桁）","warn"];
+  return[n.length+"文字","ok"];
+}
+const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+/* ---------- 機器リスト ---------- */
+function renderList(){
+  const box=$("devList");box.innerHTML="";
+  devices.forEach((d,i)=>{
+    const[msg,cls]=check(d);const el=document.createElement("div");el.className="dev";
+    el.innerHTML=`<span class="tag ${d.type}">${LABEL[d.type]}</span>
+      <input class="num" id="no${i}" placeholder="${d.type==="cas"?"C-CAS番号（20桁）":"製造番号 / MAC"}" value="${esc(d.no)}" autocomplete="off">
+      <button class="primary scan" data-i="${i}">読取</button>
+      <button class="ghost del" data-d="${i}" aria-label="削除">✕</button>
+      ${d.type==="stb"?`<input id="model${i}" placeholder="型番（任意）" value="${esc(d.model||"")}" style="grid-column:2/-1">`:""}
+      <span class="hint ${cls}">${msg}</span>`;
+    box.appendChild(el);
+    el.querySelector("#no"+i).addEventListener("input",e=>{d.no=e.target.value;hint(i);saveDraft()});
+    const m=el.querySelector("#model"+i);if(m)m.addEventListener("input",e=>{d.model=e.target.value;saveDraft()});
+  });
+  box.querySelectorAll(".scan").forEach(b=>b.onclick=()=>openScanner(+b.dataset.i));
+  box.querySelectorAll(".del").forEach(b=>b.onclick=()=>{devices.splice(+b.dataset.d,1);renderList();saveDraft()});
+}
+function hint(i){const h=$("devList").children[i].querySelector(".hint");const[m,c]=check(devices[i]);h.textContent=m;h.className="hint "+c}
+
+/* ---------- スキャン ---------- */
+function makeReader(){
+  const F=ZXing.BarcodeFormat,h=new Map();
+  h.set(ZXing.DecodeHintType.POSSIBLE_FORMATS,[F.CODE_128,F.CODE_39,F.ITF,F.EAN_13,F.CODABAR,F.QR_CODE,F.DATA_MATRIX]);
+  h.set(ZXing.DecodeHintType.TRY_HARDER,true);
+  return new ZXing.BrowserMultiFormatReader(h,300);
+}
+async function openScanner(target){
+  scanTarget=target;$("scanMsg").textContent="";
+  $("scanTitle").textContent=(target==="cust"?"顧客番号":LABEL[devices[target].type])+" のバーコードを枠に合わせてください";
+  $("scanner").hidden=false;
+  if(typeof ZXing==="undefined"){$("scanMsg").textContent="読取ライブラリを読み込めません。通信状態を確認してください。";return}
+  reader=makeReader();
+  try{await reader.decodeFromConstraints({video:{facingMode:{ideal:"environment"},width:{ideal:1920},height:{ideal:1080}}},$("video"),r=>{if(r)accept(r.getText())})}
+  catch(e){$("scanMsg").textContent="カメラを起動できません（HTTPSで開いているか、カメラの許可を確認）。「写真から読取」を使えます。"}
+}
+function closeScanner(){try{reader&&reader.reset()}catch(e){}reader=null;$("scanner").hidden=true}
+function accept(text){
+  const t=scanTarget;if(navigator.vibrate)try{navigator.vibrate(80)}catch(e){}
+  closeScanner();
+  if(t==="cust"){$("custNo").value=clean(text);saveDraft();const f=devices.findIndex(x=>!clean(x.no));if(f>=0)setTimeout(()=>openScanner(f),350);return}
+  devices[t].no=clean(text);renderList();saveDraft();
+  const next=devices.findIndex((x,j)=>j>t&&!clean(x.no));if(next>=0)setTimeout(()=>openScanner(next),350);
+}
+$("scanCust").onclick=()=>openScanner("cust");
+$("closeScan").onclick=closeScanner;
+$("photoBtn").onclick=()=>$("photoInput").click();
+$("photoInput").onchange=async e=>{
+  const f=e.target.files[0];e.target.value="";if(!f)return;$("scanMsg").textContent="解析中…";
+  const url=URL.createObjectURL(f);
+  try{const r=await makeReader().decodeFromImageUrl(url);accept(r.getText())}
+  catch(err){$("scanMsg").textContent="読み取れませんでした。バーコードを大きく、ピントを合わせて撮り直してください。"}
+  finally{URL.revokeObjectURL(url)}
+};
+
+/* ---------- 送信 ---------- */
+function status(msg,cls){const s=$("status");s.hidden=false;s.textContent=msg;s.className="status "+(cls||"")}
+async function post(payload){
+  const res=await fetch(CONFIG.GAS_URL,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify(payload)});
+  const j=await res.json();
+  if(!j.ok)throw new Error(j.error==="token"?"合言葉（TOKEN）が一致しません":"送信内容に不備があります（"+j.error+"）");
+  return j;
+}
+function addHist(p){const h=ls("kiki-hist")||[];h.unshift({at:new Date().toLocaleString("ja-JP"),custNo:p.custNo,n:p.devices.length});ls("kiki-hist",h.slice(0,20));renderHist()}
+function renderHist(){const h=ls("kiki-hist")||[];$("hist").innerHTML=h.length?h.map(x=>`<div><span>${esc(x.custNo)}（${x.n}台）</span><span class="sub">${esc(x.at)}</span></div>`).join(""):'<span class="sub">まだありません</span>'}
+function renderQueue(){const q=ls("kiki-queue")||[];$("queueBox").hidden=!q.length;$("queueCount").textContent=q.length?`（${q.length}件）`:""}
+
+$("sendBtn").onclick=async()=>{
+  const custNo=clean($("custNo").value);
+  const list=devices.filter(d=>clean(d.no)).map(d=>({type:d.type,no:clean(d.no),model:clean(d.model)}));
+  if(!configured()){status("下の「接続設定」に中継URLと合言葉を入れてください。","err");$("cfgBox").scrollIntoView({behavior:"smooth"});return}
+  if(!custNo){status("顧客番号を入れてください。","err");$("custNo").focus();return}
+  if(!list.length){status("機器の番号が1つもありません。","err");return}
+  const payload={token:CONFIG.TOKEN,id:Date.now().toString(36)+Math.random().toString(36).slice(2,7),custNo,staff:$("staff").value.trim(),devices:list};
+  $("sendBtn").disabled=true;status("送信中…");
+  try{await post(payload);addHist(payload);status(`送信しました：${custNo}（${list.length}台）`,"ok");resetForm()}
+  catch(e){
+    if(e instanceof TypeError){const q=ls("kiki-queue")||[];q.push(payload);ls("kiki-queue",q);renderQueue();status("通信できないため端末に保存しました。あとで再送してください。","err");resetForm()}
+    else status(e.message,"err");
+  }finally{$("sendBtn").disabled=false}
+};
+$("retry").onclick=async()=>{
+  const q=ls("kiki-queue")||[];const rest=[];
+  for(const p of q){try{await post(p);addHist(p)}catch(e){rest.push(p)}}
+  ls("kiki-queue",rest);renderQueue();
+  status(rest.length?`${q.length-rest.length}件送信、${rest.length}件はまだ未送信です。`:"未送信分をすべて送りました。",rest.length?"err":"ok");
+};
+function resetForm(){$("custNo").value="";devices=blank();renderList();saveDraft()}
+let armed=false;
+$("clearBtn").onclick=e=>{if(!armed){armed=true;e.target.textContent="もう一度押す";setTimeout(()=>{armed=false;e.target.textContent="クリア"},3000);return}
+  armed=false;e.target.textContent="クリア";resetForm();$("status").hidden=true};
+$("addPair").onclick=()=>{devices.push(...blank());renderList();saveDraft()};
+$("addStb").onclick=()=>{devices.push({type:"stb",no:"",model:""});renderList();saveDraft()};
+$("addCas").onclick=()=>{devices.push({type:"cas",no:"",model:""});renderList();saveDraft()};
+$("custNo").addEventListener("input",saveDraft);$("staff").addEventListener("input",saveDraft);
+
+/* ---------- 接続設定 ---------- */
+const configured=()=>/^https:\/\/script\.google(usercontent)?\.com\//.test(CONFIG.GAS_URL||"")&&!!CONFIG.TOKEN;
+function renderCfg(){
+  const ok=configured();
+  $("cfgForm").hidden=ok;$("cfgEdit").hidden=!ok;
+  $("cfgState").textContent=ok?"設定済みです。":"最初に一度だけ、管理者から聞いた中継URLと合言葉を入れてください。";
+  $("cfgState").style.color=ok?"var(--ok)":"var(--warn)";
+  $("cfgUrl").value=CONFIG.GAS_URL||"";$("cfgToken").value=CONFIG.TOKEN||"";
+}
+$("cfgSave").onclick=()=>{
+  const url=$("cfgUrl").value.trim(),tok=$("cfgToken").value.trim();
+  if(!/^https:\/\/script\.google(usercontent)?\.com\/.+\/exec$/.test(url)){$("cfgState").textContent="URLは https://script.google.com/macros/s/…/exec の形で入れてください。";$("cfgState").style.color="var(--err)";return}
+  if(!tok){$("cfgState").textContent="合言葉を入れてください。";$("cfgState").style.color="var(--err)";return}
+  CONFIG.GAS_URL=url;CONFIG.TOKEN=tok;ls("kiki-config",CONFIG);renderCfg();
+};
+$("cfgEdit").onclick=()=>{$("cfgForm").hidden=false;$("cfgEdit").hidden=true};
+
+loadDraft();renderList();renderHist();renderQueue();renderCfg();
+</script>
+</body>
+</html>
