@@ -24,7 +24,8 @@
     // 顧客ページだと判定するURL（正規表現）。@match より絞りたいとき用
     PAGE_URL: /.*/,
 
-    // 顧客番号の取り方。どちらか（上が優先）
+    // 顧客番号の取り方（上から順に試す）
+    CUST_NO_URL_PARAM: '',                                 // URLの ?xxx=顧客番号 の xxx。例: 'para0'
     CUST_NO_SELECTOR: '',                                  // 例: '#customerNo', 'td.cust-id'
     CUST_NO_REGEX: /顧客(?:番号|No\.?|ＮＯ|コード|ID)\s*[:：]?\s*([A-Za-z0-9\-]+)/,
 
@@ -73,6 +74,10 @@
 
   /* ---------- 顧客番号の検出 ---------- */
   function detectCustNo() {
+    if (CONFIG.CUST_NO_URL_PARAM) {
+      const v = new URLSearchParams(location.search).get(CONFIG.CUST_NO_URL_PARAM);
+      if (v) return v.trim();
+    }
     if (CONFIG.CUST_NO_SELECTOR) {
       const el = document.querySelector(CONFIG.CUST_NO_SELECTOR);
       if (el) return (el.value || el.textContent || '').trim();
